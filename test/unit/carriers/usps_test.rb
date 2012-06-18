@@ -50,7 +50,7 @@ class USPSTest < Test::Unit::TestCase
                  '2012-01-24 07:45:00 UTC',
                  '2012-01-26 11:21:00 UTC',
                  '2012-01-27 08:03:00 UTC',
-                 '2012-01-27 08:13:00 UTC'], response.shipment_events.map{|e| e.time.to_s}
+                 '2012-01-27 08:13:00 UTC'], response.shipment_events.map{ |e| e.time.strftime('%Y-%m-%d %H:%M:00 %Z') }
   end
 
   def test_find_tracking_info_should_have_correct_names_for_shipment_events
