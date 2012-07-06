@@ -85,6 +85,42 @@ module ActiveMerchant
         'express_mps_master' => 'EXPRESS_MPS_MASTER'
       }
 
+      # FedEx tracking codes as described in the FedEx Tracking Service WSDL Guide
+      # All delays also have been marked as exceptions
+      TRACKING_STATUS_CODES = HashWithIndifferentAccess.new({
+        'AA' => :at_airport,
+        'AD' => :at_delivery,
+        'AF' => :at_fedex_facility,
+        'AR' => :at_fedex_facility,
+        'AP' => :at_pickup,
+        'CA' => :canceled,
+        'CH' => :location_changed,
+        'DE' => :exception,
+        'DL' => :delivered,
+        'DP' => :departed_fedex_location,
+        'DR' => :vehicle_furnished_not_used,
+        'DS' => :vehicle_dispatched,
+        'DY' => :exception,
+        'EA' => :exception,
+        'ED' => :enroute_to_delivery,
+        'EO' => :enroute_to_origin_airport,
+        'EP' => :enroute_to_pickup,
+        'FD' => :at_fedex_destination,
+        'HL' => :held_at_location,
+        'IT' => :in_transit,
+        'LO' => :left_origin,
+        'OC' => :order_created,
+        'OD' => :out_for_delivery,
+        'PF' => :plane_in_flight,
+        'PL' => :plane_landed,
+        'PU' => :picked_up,
+        'RS' => :return_to_shipper,
+        'SE' => :exception,
+        'SF' => :at_sort_facility,
+        'SP' => :split_status,
+        'TR' => :transfer
+      })
+
       def self.service_name_for_code(service_code)
         ServiceTypes[service_code] || "FedEx #{service_code.titleize.sub(/Fedex /, '')}"
       end
@@ -236,7 +272,7 @@ module ActiveMerchant
           is_saturday_delivery = rated_shipment.get_text('AppliedOptions').to_s == 'SATURDAY_DELIVERY'
           service_type = is_saturday_delivery ? "#{service_code}_SATURDAY_DELIVERY" : service_code
           
-          currency = handle_uk_currency(rated_shipment.get_text('RatedShipmentDetails/ShipmentRateDetail/TotalNetCharge/Currency').to_s)
+          currency = handle_incorrect_currency_codes(rated_shipment.get_text('RatedShipmentDetails/ShipmentRateDetail/TotalNetCharge/Currency').to_s)
           rate_estimates << RateEstimate.new(origin, destination, @@name,
                               self.class.service_name_for_code(service_type),
                               :service_code => service_code,
@@ -262,13 +298,32 @@ module ActiveMerchant
         message = response_message(xml)
         
         if success
-          tracking_number, origin, destination = nil
+          tracking_number, origin, destination, status, status_code, status_description = nil
           shipment_events = []
-          
+
           tracking_details = root_node.elements['TrackDetails']
           tracking_number = tracking_details.get_text('TrackingNumber').to_s
           
+          status_code = tracking_details.get_text('StatusCode').to_s
+          status_description = tracking_details.get_text('StatusDescription').to_s
+          status = TRACKING_STATUS_CODES[status_code]
+
+          origin_node = tracking_details.elements['OriginLocationAddress']
+        
+          if origin_node
+            origin = Location.new(
+                  :country =>     origin_node.get_text('CountryCode').to_s,
+                  :province =>    origin_node.get_text('StateOrProvinceCode').to_s,
+                  :city =>        origin_node.get_text('City').to_s
+            )
+          end
+
           destination_node = tracking_details.elements['DestinationAddress']
+
+          if destination_node.nil?
+            destination_node = tracking_details.elements['ActualDeliveryAddress']
+          end
+
           destination = Location.new(
                 :country =>     destination_node.get_text('CountryCode').to_s,
                 :province =>    destination_node.get_text('StateOrProvinceCode').to_s,
@@ -294,12 +349,18 @@ module ActiveMerchant
             shipment_events << ShipmentEvent.new(description, zoneless_time, location)
           end
           shipment_events = shipment_events.sort_by(&:time)
+
         end
         
         TrackingResponse.new(success, message, Hash.from_xml(response),
+          :carrier => @@name,
           :xml => response,
           :request => last_request,
+          :status => status,
+          :status_code => status_code,
+          :status_description => status_description,
           :shipment_events => shipment_events,
+          :origin => origin,
           :destination => destination,
           :tracking_number => tracking_number
         )
@@ -322,8 +383,12 @@ module ActiveMerchant
         ssl_post(test ? TEST_URL : LIVE_URL, request.gsub("\n",''))        
       end
       
-      def handle_uk_currency(currency)
-        currency =~ /UKL/i ? 'GBP' : currency
+      def handle_incorrect_currency_codes(currency)
+        case currency
+        when /UKL/i then 'GBP'
+        when /SID/i then 'SGD'
+        else currency
+        end
       end
     end
   end
