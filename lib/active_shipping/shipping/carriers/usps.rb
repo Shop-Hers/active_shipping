@@ -478,6 +478,7 @@ module ActiveMerchant
         end
         
         TrackingResponse.new(success, message, Hash.from_xml(response),
+          :carrier => @@name,
           :xml => response,
           :request => last_request,
           :shipment_events => shipment_events,
